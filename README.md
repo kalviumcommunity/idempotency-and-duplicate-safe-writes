@@ -94,6 +94,23 @@ Explain:
 4. why paging job is stored in same transaction;
 5. privacy and size risks of stored responses.
 
+### Design Decisions
+
+#### 1. Database Uniqueness
+Database uniqueness constraints are essential for race condition prevention. When multiple concurrent requests arrive with the same idempotency key, the UNIQUE constraint on (tenant_id, operation, key) ensures only one request can successfully claim the key. This provides atomic duplicate prevention at the database level, which is more reliable than application-level locking and works across multiple application instances.
+
+#### 2. Request Canonicalization and Comparison
+Request contents are canonicalized by sorting object keys before JSON stringification. This ensures that equivalent JSON objects with different property orderings produce the same hash. For example, `{title:'x',severity:'P1',serviceId:S}` and `{serviceId:S,title:'x',severity:'P1'}` generate identical SHA-256 hashes. The hash is stored with the idempotency key and compared on subsequent requests to detect payload changes while allowing the same logical request to be replayed.
+
+#### 3. 24-Hour Expiry
+The 24-hour expiry means idempotency keys are automatically cleaned up after 24 hours, balancing storage costs with the practical retry window for mobile clients. Most network timeouts and client retries occur within minutes to hours, so 24 hours provides sufficient coverage while preventing indefinite storage of idempotency records. In production, a cleanup job would expire old records, though this exercise focuses on the core idempotency mechanism.
+
+#### 4. Paging Job in Same Transaction
+The paging job is created in the same database transaction as the incident and idempotency key to ensure exactly-once semantics. If the paging job creation failed separately, we could have incidents without corresponding jobs, requiring complex recovery logic. By including it in the transaction, either all operations succeed (incident + job + idempotency record) or none do, maintaining consistency and preventing partial state.
+
+#### 5. Privacy and Size Risks of Stored Responses
+Storing complete response bodies in the idempotency_keys table introduces privacy and storage risks. Privacy: sensitive incident data (titles, service details) is stored indefinitely until expiry, potentially exceeding data retention policies. Size: large responses could bloat the database and impact performance. In production, consider storing only a reference/ID, compressing responses, implementing shorter expiry, or using a separate storage system with better lifecycle management.
+
 ## Test Coverage
 
 Supplied tests check:
