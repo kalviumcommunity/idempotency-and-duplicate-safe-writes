@@ -139,3 +139,22 @@ Submit pull-request URL, not repository homepage, branch, commit, or PDF link.
 **Tests say idempotency table is missing:** implement schema TODOs and rerun reset before tests.
 
 **Resetting production data:** never point `DATABASE_URL` at shared or production database. Reset script is destructive.
+
+
+
+## Design Decisions
+
+1. **Why database uniqueness is needed:** 
+   A composite unique index on `(tenant_id, operation, idempotency_key)` shifts concurrency control to the database engine. This provides an atomic guarantee that if 20 identical requests arrive at the exact same millisecond, only one can successfully insert the `IN_PROGRESS` row. The other 19 will naturally fail the constraint and fall back to polling or rejecting the request.
+
+2. **How request contents are canonicalized and compared:** 
+   The incoming `req.body` JSON is serialized into a string and hashed using SHA-256. This hash is stored alongside the idempotency key. If a client reuses a key but modifies the request body (e.g., changes the severity of the incident), the new payload's hash won't match the database hash, allowing the server to block the illegal state change with an HTTP 422 error.
+
+3. **What 24-hour expiry means:** 
+   Idempotency keys are typically meant to guard against short-term network hiccups and retries, not to serve as a permanent cache. Expiring them after 24 hours prevents database bloat and allows clients to safely reuse UUIDs across disconnected timeframes without triggering false duplicate conflicts.
+
+4. **Why paging job is stored in same transaction:** 
+   Wrapping the incident creation, the paging job trigger, and the idempotency completion in a single database transaction guarantees atomic state. It prevents "partial successes"—for example, creating an incident but failing to trigger the paging job, or completing the workflow but failing to save the idempotency state, which would cause a subsequent retry to duplicate the incident. 
+
+5. **Privacy and size risks of stored responses:** 
+   Storing full JSON `response_body` payloads inside the `idempotency_records` table creates significant data duplication over time. Furthermore, if the response contains PII (Personally Identifiable Information) or sensitive security data, the idempotency table becomes a secondary risk vector that bypasses standard incident access controls. Strict Row-Level Security (RLS) or rigorous TTL data-sweeping jobs are required in production to mitigate this.
