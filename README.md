@@ -94,6 +94,14 @@ Explain:
 4. why paging job is stored in same transaction;
 5. privacy and size risks of stored responses.
 
+#### Design decisions
+
+1. **Database uniqueness:** the unique `(tenant_id, operation, key)` constraint is the authority that serializes competing requests. An in-memory lock would fail across processes and after a restart.
+2. **Canonical comparison:** request object properties are recursively sorted before JSON serialization and SHA-256 hashing. Therefore equivalent JSON objects with different property order produce the same request hash, while changed values conflict..
+3. **24-hour expiry:** a claimed key remains reusable for replay for 24 hours from the claim. After expiry, the record can be reclaimed as a new operation; expiry is retention behavior, not a guarantee that old data is automatically deleted at that exact time.
+4. **Durable paging job:** the paging job is inserted in the same transaction as the incident and completed idempotency record. A commit therefore cannot expose an incident without its work item, and rollback removes every local write. External paging providers are invoked later by a worker.
+5. **Stored response risks:** replay bodies can contain sensitive data and can grow without bound. Production systems should minimize or redact stored fields, enforce response-size limits, encrypt or restrict access to the table, and retain records only as long as the replay policy requires.
+
 ## Test Coverage
 
 Supplied tests check:
