@@ -84,6 +84,37 @@ Implement:
 
 Do not call external queue/provider inside database transaction.
 
+## Design decisions
+
+Each idempotency record is scoped by the authenticated `tenant_id`, the fixed
+operation name `POST:/incidents`, and the client-provided `Idempotency-Key`.
+The database has a unique constraint on that tuple: application-level checks
+cannot reliably prevent a race between concurrent requests, while the unique
+constraint gives exactly one request ownership of the logical write.
+
+The server hashes a canonical JSON version of the complete request body using
+SHA-256. Object keys are sorted recursively before serialization, so equivalent
+objects with different property order compare equally; values and array order
+remain meaningful. Reuse of a still-live key with a different digest returns
+`409 idempotency_key_conflict` instead of applying a surprising new write.
+
+Keys expire 24 hours after their first claim (or after reuse following expiry).
+During that exercise retention window a completed response is replayed with the
+`Idempotent-Replayed: true` header. After expiry, the same scoped key starts a
+new logical request; an expiry index supports periodic cleanup in a real
+deployment.
+
+The incident, its paging-job outbox record, and the completed replay response
+are written in one database transaction. A delivery worker can publish the
+durable job after commit, so no incident is committed without a job and no job
+is emitted for a rolled-back incident. External paging providers must not be
+called inside that transaction.
+
+Stored replay bodies should be deliberately small and privacy-reviewed. This
+exercise stores the incident response as JSONB; a production service should
+avoid secrets and unnecessary PII, cap idempotency-key/body sizes, encrypt or
+redact sensitive data where needed, and expire/purge records on schedule.
+
 ### README Decisions
 
 Explain:
