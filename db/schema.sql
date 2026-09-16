@@ -11,7 +11,7 @@ CREATE TABLE incidents (
 
 CREATE TABLE idempotency_keys (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id        UUID NOT NULL,
+  tenant_id        UUID NOT NULL ,
   operation        TEXT NOT NULL,
   key              TEXT NOT NULL,
   request_hash     TEXT NOT NULL,

@@ -11,7 +11,7 @@ function canonicalize(value) {
       return result;
     }, {});
   }
-  return value;
+  return value ;
 }
 
 function hashRequest(body) {
