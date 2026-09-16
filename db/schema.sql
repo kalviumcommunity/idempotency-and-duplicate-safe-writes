@@ -9,5 +9,29 @@ CREATE TABLE incidents (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- TODO: add idempotency_keys table
--- TODO: add paging_jobs table
+CREATE TABLE idempotency_keys (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        UUID NOT NULL,
+  operation        TEXT NOT NULL,
+  key              TEXT NOT NULL,
+  request_hash     TEXT NOT NULL,
+  state            TEXT NOT NULL CHECK (state IN ('processing', 'completed', 'failed')),
+  response_status  INTEGER,
+  response_body    JSONB,
+  response_headers JSONB,
+  expires_at       TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at     TIMESTAMPTZ,
+  UNIQUE (tenant_id, operation, key)
+);
+
+CREATE TABLE paging_jobs (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id          UUID NOT NULL,
+  incident_id        UUID NOT NULL REFERENCES incidents(id),
+  idempotency_key_id UUID NOT NULL REFERENCES idempotency_keys(id),
+  state              TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (state IN ('pending', 'processing', 'completed', 'failed')),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (idempotency_key_id)
+);
