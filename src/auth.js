@@ -1,8 +1,9 @@
-function auth(req, res, next) {
-  const userId = req.get('X-User-Id');
-  const tenantId = req.get('X-Tenant-Id');
-  if (!userId || !tenantId) return res.status(401).json({ error: 'authentication_required' });
-  req.user = { userId, tenantId };
-  next();
-}
-module.exports = { auth };
+const pgp = require('pg-promise')();
+
+const connection =
+  process.env.DATABASE_URL ||
+  'postgres://postgres:postgres@localhost:54329/incidenthub';
+
+const db = pgp(connection);
+
+module.exports = { db, pgp };
