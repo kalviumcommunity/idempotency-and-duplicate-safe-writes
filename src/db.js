@@ -1,4 +1,3 @@
-const pgp = require('pg-promise')();
-const connection = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:54329/incidenthub';
-const db = pgp(connection);
+const { db, pgp } = require('./auth');
+
 module.exports = { db, pgp };
