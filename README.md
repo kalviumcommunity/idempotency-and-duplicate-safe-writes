@@ -1,141 +1,41 @@
-# Idempotency and Duplicate-Safe Writes
+## Design Decisions
 
-Build duplicate-safe `POST /incidents` endpoint that returns one durable result when same logical request arrives more than once.
+### 1. Database uniqueness
 
-## Why This Repository Exists
+The idempotency key is scoped by authenticated tenant and operation.
 
-Current starter inserts incident on every request. It has no idempotency record, duplicate claim, stored replay result, or durable paging job. Supplied tests describe required contract.
+The database enforces:
 
-## Repository Structure
+`UNIQUE (tenant_id, operation, key)`
 
-```text
-.
-├── db/
-│   └── schema.sql              # incidents table; add idempotency and paging tables
-├── scripts/
-│   └── resetDb.js              # recreates exercise database
-├── src/
-│   ├── app.js                  # Express route and error handler
-│   ├── auth.js                 # provides authenticated exercise tenant/user
-│   ├── db.js                   # PostgreSQL connection
-│   └── incidents.js            # broken handler to repair
-├── tests/
-│   └── idempotency.test.js     # 14 supplied contract tests
-├── docker-compose.yml          # local PostgreSQL on port 54329
-├── package.json
-└── package-lock.json
-```
+This is required because an application-level check followed by an insert has a race condition. Concurrent requests can both observe that a key does not exist and both create an incident. The database uniqueness constraint provides the atomic ownership boundary.
 
-## Prerequisites
+### 2. Canonical request hashing
 
-- Git
-- Node.js 18 or newer
-- npm
-- Docker with Docker Compose
-- GitHub account
+The request body is canonicalized before hashing. Object keys are sorted recursively while array ordering is preserved. The canonical JSON representation is then hashed using SHA-256.
 
-## Setup
+This means requests with the same logical contents but different JSON property ordering produce the same request hash.
 
-1. Fork repository to your GitHub account.
-2. Clone your fork:
+The stored hash binds an idempotency key to the original request contents. Reusing the same key with different contents therefore returns `409 idempotency_key_conflict`.
 
-```bash
-git clone https://github.com/<your-username>/idempotency-and-duplicate-safe-writes.git
-cd idempotency-and-duplicate-safe-writes
-git checkout -b idempotent-incidents
-```
+### 3. Twenty-four-hour expiry
 
-3. Start PostgreSQL and install dependencies:
+Every idempotency record receives an expiry time of 24 hours from creation.
 
-```bash
-docker compose up -d
-npm install
-```
+Within that period, the key remains bound to its original request and result. After expiry, the key can be reclaimed for a new logical operation.
 
-4. Reset database and run tests:
+Expiry is checked while holding the idempotency record lock so concurrent requests cannot both reclaim the same expired key.
 
-```bash
-npm run db:reset
-npm test
-```
+### 4. Transactional paging job
 
-Starter tests fail until required schema and handler are implemented. This is expected.
+The incident and its durable paging job are created in the same database transaction as the idempotency record.
 
-## What to Implement
+This prevents a committed incident from existing without its corresponding paging job. If any database operation fails, the transaction rolls back all local writes.
 
-### Database
+External queue or paging-provider calls should not be made inside this transaction. The durable paging job is the database-backed handoff for later processing.
 
-Add:
+### 5. Stored response considerations
 
-- scoped idempotency record with key, request hash, state, replay metadata, and expiry;
-- unique ownership for authenticated tenant + operation + key;
-- durable paging-job table.
+The completed response is stored so a retry after a lost client response can replay the original result without creating another incident.
 
-### Handler
-
-Implement:
-
-- required `Idempotency-Key` validation;
-- authenticated tenant scope;
-- canonical request hash;
-- atomic key claim before incident creation;
-- completed replay, changed-request conflict, and processing response;
-- one transaction for key, incident, paging job, and completed response.
-
-Do not call external queue/provider inside database transaction.
-
-### README Decisions
-
-Explain:
-
-1. why database uniqueness is needed;
-2. how request contents are canonicalized and compared;
-3. what 24-hour expiry means;
-4. why paging job is stored in same transaction;
-5. privacy and size risks of stored responses.
-
-## Test Coverage
-
-Supplied tests check:
-
-- missing key;
-- first request;
-- sequential replay;
-- replay response header;
-- changed payload conflict;
-- tenant isolation;
-- 20 concurrent duplicates;
-- exactly one incident and paging job;
-- lost response retry;
-- processing and failed states;
-- transaction rollback;
-- canonical hash;
-- stored scope and operation.
-
-Do not change tests.
-
-## Submit Pull Request
-
-```bash
-git add .
-git commit -m "Implement duplicate-safe incident creation"
-git push -u origin idempotent-incidents
-```
-
-Open pull request from `idempotent-incidents` into your fork's `main` branch. Include:
-
-- summary of approach;
-- design decisions;
-- passing test output.
-
-Submit pull-request URL, not repository homepage, branch, commit, or PDF link.
-
-## Troubleshooting
-
-**Docker port conflict:** stop process using port 54329 or change port consistently in Compose and `DATABASE_URL`.
-
-**Database connection failed:** wait until PostgreSQL is healthy, then run `npm run db:reset` again.
-
-**Tests say idempotency table is missing:** implement schema TODOs and rerun reset before tests.
-
-**Resetting production data:** never point `DATABASE_URL` at shared or production database. Reset script is destructive.
+The stored response should remain small and should not contain secrets or sensitive data unnecessarily. The idempotency key itself is also scoped to the authenticated tenant so one tenant cannot replay another tenant's result.
